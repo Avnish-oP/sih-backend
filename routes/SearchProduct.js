@@ -1,58 +1,77 @@
 import express from "express";
-import Product from "../models/productSchema.js";
-import axios from "axios";
+import Product from "../models/productSchema.js"; 
+import webcrawler from "../lib/crawler.js";
+import connectDb from "../db/dbConfig.js"; 
 
 const router = express.Router();
 
+router.get("/make-model", async (req, res) => {
+    const { name, type, make, model } = req.body;
 
-router.get('/', async (req, res) => {
-    const {name, make, model, searchType, specification } = req.body;
-    if(searchType === 'specification' && !specification) {
-        return res.status(400).json({
-            success: false,
-            message: 'Specification is required for specification based search'
-        });
+    // Validate query parameters
+    if (!name && !type && !make && !model) {
+        return res.status(400).json({ error: "At least one query parameter (name, type, make, model) is required" });
     }
-    else if(searchType === 'model' && !make && !model) {
-        return res.status(400).json({
-            success: false,
-            message: 'Make and model are required for model based search'
-        });
-    }
-    else{
-        try {
-            if (searchType === 'specification') {
-                const product = await axios.get("http://ml-api.example.com/search", {
-                    params: {
-                        specification
-                    }
-                }
-                );
-                return product.data;
-            }
-            const product = await Product.findOne({ make, model });
-            const result = {
-                make: product.make,
-                model: product.model,
-                currentPrice: product.currentPrice,
-                priceHistory: product.priceHistory,
-                sources: product.sources,
-                createdAt: product.createdAt
-            }
-            if (product) {
-                return res.status(200).json({
-                    success: true,
-                    data: result
-                });
-            } else {
-                return res.redirect('http://ml-api.example.com/search');
-            }
-        } catch (error) {
-            console.error(error);
-            res.status(500).send('Server Error');
+    console.log("Search parameters:", { name, type, make, model });
+
+    try {
+        await connectDb();
+
+        // Construct queries for exact and partial matches
+        const exactMatchQuery = {
+            $and: [
+                name ? { name: new RegExp(`^${name}$`, "i") } : null,
+                type ? { type: new RegExp(`^${type}$`, "i") } : null,
+                make ? { make: new RegExp(`^${make}$`, "i") } : null,
+                model ? { model: new RegExp(`^${model}$`, "i") } : null,
+            ].filter(Boolean),
+        };
+
+        const partialMatchQuery = {
+            $or: [
+                name ? { name: new RegExp(name, "i") } : null,
+                type ? { type: new RegExp(type, "i") } : null,
+                make ? { make: new RegExp(make, "i") } : null,
+                model ? { model: new RegExp(model, "i") } : null,
+            ].filter(Boolean),
+        };
+
+        // Step 1: Look for exact matches
+        let dbProducts = await Product.find(exactMatchQuery);
+
+        if (dbProducts.length === 0) {
+            console.log("No exact matches found. Searching for partial matches...");
+            // Step 2: If no exact matches, look for partial matches
+            dbProducts = await Product.find(partialMatchQuery);
         }
 
+        if (dbProducts.length > 0) {
+            console.log(`Found ${dbProducts.length} products in the database`);
+            return res.status(200).json({ success: true, products: dbProducts });
+        }
+
+        console.log("No matches found in the database. Searching via webcrawler...");
+
+        // Step 3: If no matches, search using webcrawler
+        const crawledProducts = await webcrawler(name); // Adjust webcrawler to accept additional parameters if needed
+
+        if (crawledProducts.length === 0) {
+            return res.status(404).json({ success: false, message: "No products found" });
+        }
+
+        // Step 4: Save crawled products to the database
+        for (const product of crawledProducts) {
+            const newProduct = new Product(product);
+            await newProduct.save();
+        }
+
+        console.log("Crawled products saved to the database");
+        return res.status(200).json({ success: true, products: crawledProducts });
+
+    } catch (error) {
+        console.error("Error in search route", error);
+        res.status(500).json({ success: false, message: "Server error", error });
     }
 });
 
-module.exports = router;
+export default router;

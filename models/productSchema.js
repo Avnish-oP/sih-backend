@@ -1,16 +1,18 @@
-import mongoose from "mongoose";
+import mongoose, { Schema } from "mongoose";
 
 const priceHistorySchema = new mongoose.Schema({
   price: { type: Number, required: true },
   date: { type: Date, default: Date.now },
 });
 
+
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   make: { type: String, required: true },
   model: { type: String, required: true },
-  specifications: { type: Map, of: String }, // Key-value pair for dynamic specifications
+  specifications: { type: Schema.Types.Mixed, of: String },
   currentPrice: { type: Number, required: true },
+  currency: { type: currency, required: true },
   priceHistory: [priceHistorySchema],
   sources: [
     {
